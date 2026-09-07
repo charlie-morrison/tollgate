@@ -23,10 +23,17 @@ export class PaymentHeaderError extends Error {
 
 export const X402_VERSION = 1;
 
-/** The settlement scheme we ask for, and the one we will accept a payment under. */
+/**
+ * The settlement scheme we ask for, and the one we will accept a payment under.
+ *
+ * The network id is CAIP-2 (`hedera:testnet`) because that is what the facilitator
+ * advertises in its own `/supported` response. The hyphenated spelling reads more
+ * naturally and is wrong: a buyer selecting an offer by network would not match it, and
+ * the mismatch surfaces only once the challenge and the verify call are used together.
+ */
 export const SCHEME = Object.freeze({
   scheme: 'exact',
-  network: 'hedera-testnet',
+  network: 'hedera:testnet',
 });
 
 /**

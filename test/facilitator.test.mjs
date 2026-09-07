@@ -263,3 +263,18 @@ test('accepted and paymentRequirements cannot diverge — that divergence is a r
   const env = buildEnvelope({ requirements: reqs(), transaction: TX });
   assert.equal(env.paymentPayload.accepted, env.paymentRequirements, 'same object, so they cannot drift');
 });
+
+test('requirements carry the amount field the facilitator validates on', () => {
+  // Measured against the live facilitator: omitting `amount` is HTTP 400 "amount should
+  // not be empty, amount must be a string" — a rejection of the request, not of the
+  // payment, and one that no amount of correct signing can survive. Both spellings must
+  // be present and must agree, or the server quotes one price and demands another.
+  const r = buildRequirements({
+    config: { payTo: '0.0.1', feePayer: '0.0.2' },
+    price: 350000n,
+    resource: 'http://x/q',
+  });
+  assert.equal(r.amount, '350000');
+  assert.equal(r.maxAmountRequired, '350000');
+  assert.equal(typeof r.amount, 'string', 'the validator demands a string, not a number');
+});

@@ -9,6 +9,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "pay": "node tools/pay-once.mjs"
+  },
+  "devDependencies": {
+    "@hashgraph/sdk": "^2.60.0"
   }
 }

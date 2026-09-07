@@ -104,12 +104,23 @@ export function buildRequirements({ config, price, resource }) {
   return Object.freeze({
     scheme: 'exact',
     network: config.network || 'hedera:testnet',
+    // Both spellings, and both are load-bearing. The facilitator's validator requires
+    // `amount` and rejects the whole request without it — "amount should not be empty,
+    // amount must be a string", HTTP 400, measured — while `maxAmountRequired` is the
+    // name the x402 challenge uses. Sending only the protocol's spelling is refused
+    // before the payment is ever examined.
+    amount: price.toString(),
     // tinybar is an integer count; JSON numbers cannot hold large ones exactly, so string.
     maxAmountRequired: price.toString(),
     resource,
     payTo: config.payTo,
     // "0.0.0" is native HBAR rather than an HTS token.
     asset: config.asset || '0.0.0',
+    // Required by the validator, and as a NUMBER — "maxTimeoutSeconds must not be less
+    // than 1, must be a number conforming to the specified constraints", HTTP 400,
+    // measured. Note the asymmetry with the amounts, which must be strings: this API
+    // does not take one position on numeric types, so neither can we.
+    maxTimeoutSeconds: 120,
     extra: Object.freeze({ feePayer: config.feePayer }),
   });
 }
@@ -256,11 +267,16 @@ async function postJson({ url, body, fetchImpl, timeoutMs, op }) {
   // A 5xx from this API has historically meant "our validator threw", not "your payment
   // is bad" — so it must never be collapsed into a rejection verdict.
   if (!res.ok) {
-    throw new FacilitatorError(`facilitator ${op} returned HTTP ${res.status}`, {
-      reason: `${op}_http_error`,
-      status: res.status,
-      body: parsed,
-    });
+    // Carry the validator's own words into the message. A bare "returned HTTP 400" says
+    // only that something is wrong with the request, and the whole difficulty of talking
+    // to this API is working out *which* field it means.
+    const said = typeof parsed?.message === 'string' ? parsed.message
+               : typeof parsed?.error === 'string' ? parsed.error
+               : '';
+    throw new FacilitatorError(
+      `facilitator ${op} returned HTTP ${res.status}${said ? `: ${said}` : ''}`,
+      { reason: `${op}_http_error`, status: res.status, body: parsed },
+    );
   }
   return parsed;
 }
