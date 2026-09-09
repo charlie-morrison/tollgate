@@ -187,7 +187,28 @@ export function configFromEnv(env = process.env) {
     throw new Error(`missing required environment: ${missing.join(', ')}`);
   }
 
-  return { payTo, facilitator: { url: facilitatorUrl, feePayer } };
+  // Receipts are opt-in and split in two, because the two halves have different costs.
+  // Reading needs only a topic id and stays keyless. Writing needs an operator key, which
+  // is the one thing this server is proud not to have — so it is enabled only when an
+  // operator is supplied explicitly, and a half-configured writer is refused rather than
+  // quietly downgraded to a read-only deployment that looks like it is filing receipts.
+  const topicId = env.TOLLGATE_RECEIPT_TOPIC || null;
+  const operatorId = env.HEDERA_OPERATOR_ID || null;
+  const operatorKey = env.HEDERA_OPERATOR_KEY || null;
+  if (!!operatorId !== !!operatorKey) {
+    throw new Error(
+      'receipt writing needs BOTH HEDERA_OPERATOR_ID and HEDERA_OPERATOR_KEY, or neither',
+    );
+  }
+  if (operatorId && !topicId) {
+    throw new Error('receipt operator supplied without TOLLGATE_RECEIPT_TOPIC');
+  }
+
+  return {
+    payTo,
+    facilitator: { url: facilitatorUrl, feePayer },
+    receipts: topicId ? { topicId, operatorId, operatorKey } : null,
+  };
 }
 
 const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;

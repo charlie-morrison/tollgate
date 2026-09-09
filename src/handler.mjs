@@ -37,6 +37,7 @@ import {
   settlePayment,
   FacilitatorError,
 } from './facilitator.mjs';
+import { buildReceipt, readReceipts, emitReceipt } from './receipts.mjs';
 
 /**
  * A replay guard with an explicit two-step claim.
@@ -107,6 +108,7 @@ export async function handleRequest({
   const {
     verify = verifyPayment,
     settle = settlePayment,
+    emit = emitReceipt,
     fetchImpl,
     timeoutMs,
   } = deps;
@@ -122,9 +124,18 @@ export async function handleRequest({
       status: 'ok',
       // Stated plainly because it is the unusual property, and a reader of a payments
       // box should not have to infer it from the absence of code.
-      holdsPrivateKey: false,
+      //
+      // It is COMPUTED, never hardcoded. Enabling receipt writing gives this process an
+      // operator key, and a health endpoint that kept claiming otherwise would be lying
+      // about the single property the design is built on. Note what the key can and
+      // cannot do: it signs receipts and pays their sub-cent fees, and is deliberately
+      // not the payee, so it can never move revenue.
+      holdsPrivateKey: Boolean(config.receipts?.operatorKey),
       payTo: config.payTo,
       facilitator: config.facilitator.url,
+      receipts: config.receipts?.topicId
+        ? { topicId: config.receipts.topicId, writeEnabled: Boolean(config.receipts.operatorKey) }
+        : null,
       schedule: publishedSchedule(),
     });
   }
@@ -133,8 +144,27 @@ export async function handleRequest({
     return json(200, { schedule: publishedSchedule() });
   }
 
+  // The public settlement trail. Free and keyless, deliberately: an audit trail you have
+  // to pay us to read, or that only we can read, is not much of an audit trail.
+  if (parsed.pathname === '/receipts') {
+    if (!config.receipts?.topicId) {
+      return json(404, { error: 'receipts not enabled on this deployment' });
+    }
+    try {
+      const trail = await readReceipts(config.receipts.topicId, { fetchImpl, timeoutMs });
+      return json(200, trail);
+    } catch (err) {
+      // Distinguished from an empty trail on purpose: "we could not read the ledger" and
+      // "the ledger says nothing happened" are opposite answers.
+      return json(502, { error: 'could not read the receipt topic', detail: err.message });
+    }
+  }
+
   if (parsed.pathname !== '/query') {
-    return json(404, { error: 'not found', endpoints: ['/query', '/schedule', '/health'] });
+    return json(404, {
+      error: 'not found',
+      endpoints: ['/query', '/schedule', '/receipts', '/health'],
+    });
   }
 
   // 1. Price the live request. Before any payment is examined, and before any quote is
@@ -257,6 +287,23 @@ export async function handleRequest({
   }
 
   const data = await serve(request);
+
+  // The public record, written after the buyer has what they paid for and never awaited.
+  // A consensus round must not sit between a paying buyer and their data, and a failure
+  // to file the paperwork must never be able to fail a request that already settled.
+  if (config.receipts?.topicId && config.receipts?.operatorId && config.receipts?.operatorKey) {
+    emit(
+      buildReceipt({
+        transactionId: settlement.transactionId,
+        payer: verdict.payer ?? null,
+        payee: config.payTo,
+        amount: price,
+        resource,
+      }),
+      config.receipts,
+      { onError: (err) => console.error('[tollgate] receipt not filed:', err.message) },
+    );
+  }
 
   return json(
     200,

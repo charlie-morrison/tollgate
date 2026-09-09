@@ -41,8 +41,31 @@ paying, which is the protocol's first step and is deliberately never rate-limite
 ```bash
 curl 'http://144.172.101.164:8404/query?records=3&detail=full'   # 402 + machine-readable price
 curl  http://144.172.101.164:8404/schedule                       # the fee schedule
+curl  http://144.172.101.164:8404/receipts                       # the public settlement trail
 curl  http://144.172.101.164:8404/health
 ```
+
+### The receipt trail
+
+Every settled payment is published to a Hedera Consensus Service topic as an
+`x402.receipt.v1` record — transaction id, payer, payee, the amount actually charged, and
+the resource it bought. Topic **`0.0.10446488`**, created with **no submit key and no admin
+key**, so the record is append-only and not even we can rewrite it.
+
+You do not have to take our `/receipts` endpoint's word for any of it. Reading is plain
+mirror-node REST — no key, no account, no SDK — and the endpoint publishes the raw URL as
+`verifyItYourself`:
+
+```bash
+curl 'https://testnet.mirrornode.hedera.com/api/v1/topics/0.0.10446488/messages?limit=25&order=desc'
+```
+
+Writing receipts is opt-in and separate from serving. It needs an operator key, so the
+public deployment runs read-only and `/health` reports `holdsPrivateKey` **computed from
+the running config** rather than as a constant — a health endpoint that kept claiming
+"no key" after one was handed to it would be lying about the one property this design
+rests on. The receipt operator is deliberately **not** the payee: it signs records and
+pays their sub-cent fees, and can never move revenue.
 
 To actually pay, you need a Hedera testnet account. The buyer is the only thing here that
 needs the Hedera SDK:
@@ -75,11 +98,12 @@ from the facilitator's own reply:
 ## Status
 
 Requirements 1–3 of the Hedera **AI & Agentic Payments** track are met: hosted, settling
-over the sponsor's facilitator, metered per unit of work. The commit history is the honest
-record of how much exists at any moment. See [`docs/DESIGN.md`](docs/DESIGN.md) for the
-protocol shape and [`docs/PRICING.md`](docs/PRICING.md) for the fee schedule.
+over the sponsor's facilitator, metered per unit of work — plus verifiable payment audit
+trails on HCS. The commit history is the honest record of how much exists at any moment.
+See [`docs/DESIGN.md`](docs/DESIGN.md) for the protocol shape and
+[`docs/PRICING.md`](docs/PRICING.md) for the fee schedule.
 
-Running the tests requires no network and no account: `npm test` (105 assertions).
+Running the tests requires no network and no account: `npm test` (136 assertions).
 
 ## Licence
 
