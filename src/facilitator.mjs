@@ -81,10 +81,15 @@ export function buildEnvelope({ requirements, transaction }) {
  *
  * @param {object} args
  * @param {{payTo: string, feePayer: string, network?: string, asset?: string}} args.config
- * @param {bigint} args.price     tinybar
+ * @param {bigint} args.price     tinybar — the metered price, always
  * @param {string} args.resource  absolute URL of what is being sold
+ * @param {bigint} [args.amount]  what to charge, in the asset's own smallest unit.
+ *   Defaults to `price`, i.e. tinybar for native HBAR. An HTS token is denominated in
+ *   token units, so the amount and the price are the same number in different currencies;
+ *   `price` stays in the signature because it remains the thing being validated, and
+ *   src/hts.mjs derives the token amount from it rather than pricing anything itself.
  */
-export function buildRequirements({ config, price, resource }) {
+export function buildRequirements({ config, price, resource, amount }) {
   if (!config || typeof config.payTo !== 'string' || !config.payTo) {
     throw new FacilitatorError('config.payTo is required', { reason: 'config_invalid' });
   }
@@ -100,6 +105,15 @@ export function buildRequirements({ config, price, resource }) {
   if (typeof resource !== 'string' || !resource) {
     throw new FacilitatorError('resource must be an absolute URL', { reason: 'config_invalid' });
   }
+  if (amount !== undefined) {
+    if (typeof amount !== 'bigint') {
+      throw new TypeError('amount must be a bigint; money is not a float');
+    }
+    if (amount <= 0n) {
+      throw new RangeError(`refusing to charge a non-positive amount: ${amount}`);
+    }
+  }
+  const charged = amount === undefined ? price : amount;
 
   return Object.freeze({
     scheme: 'exact',
@@ -109,9 +123,9 @@ export function buildRequirements({ config, price, resource }) {
     // amount must be a string", HTTP 400, measured — while `maxAmountRequired` is the
     // name the x402 challenge uses. Sending only the protocol's spelling is refused
     // before the payment is ever examined.
-    amount: price.toString(),
+    amount: charged.toString(),
     // tinybar is an integer count; JSON numbers cannot hold large ones exactly, so string.
-    maxAmountRequired: price.toString(),
+    maxAmountRequired: charged.toString(),
     resource,
     payTo: config.payTo,
     // "0.0.0" is native HBAR rather than an HTS token.

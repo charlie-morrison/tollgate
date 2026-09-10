@@ -38,6 +38,43 @@ import {
   FacilitatorError,
 } from './facilitator.mjs';
 import { buildReceipt, readReceipts, emitReceipt } from './receipts.mjs';
+import { tokenAmountFor, buildTokenOffer, tokenSchedule } from './hts.mjs';
+
+/**
+ * Every offer this server is willing to be paid under, as server-authored requirements.
+ *
+ * HBAR first, then the token if one is configured. The order is fixed in code and does
+ * not depend on anything in the request: a buyer selects an offer by signing a
+ * transaction that satisfies it, never by telling us which one to apply.
+ */
+export function candidateRequirements({ config, price, resource }) {
+  const base = { payTo: config.payTo, feePayer: config.facilitator.feePayer };
+  const list = [buildRequirements({ config: base, price, resource })];
+
+  if (config.token) {
+    list.push(
+      buildRequirements({
+        config: { ...base, asset: config.token.tokenId },
+        price,
+        resource,
+        amount: tokenAmountFor(price, config.token.tinybarPerUnit),
+      }),
+    );
+  }
+  return list;
+}
+
+/** The 402 body, carrying one offer per asset we accept. */
+function challengeFor({ config, price, resource, reason }) {
+  const challenge = buildChallenge({ config, price, resource, schedule: publishedSchedule() });
+  if (config.token) {
+    challenge.accepts.push(
+      buildTokenOffer({ base: challenge.accepts[0], token: config.token, price }),
+    );
+    challenge.tokenSchedule = tokenSchedule(config.token);
+  }
+  return reason === undefined ? challenge : { ...challenge, reason };
+}
 
 /**
  * A replay guard with an explicit two-step claim.
@@ -188,52 +225,60 @@ export async function handleRequest({
     payment = readPaymentHeader(getHeader('x-payment'));
   } catch (err) {
     if (!(err instanceof PaymentHeaderError)) throw err;
-    const challenge = buildChallenge({
-      config,
-      price,
-      resource,
-      schedule: publishedSchedule(),
-    });
     // The reason travels with the challenge. "You sent no payment" and "you sent an empty
     // one" are different mistakes and a buyer debugging at 3am should not have to guess.
-    return json(402, { ...challenge, reason: err.reason });
+    return json(402, challengeFor({ config, price, resource, reason: err.reason }));
   }
 
   // The terms are ours. Nothing from the buyer's envelope reaches this call except the
   // signed transaction itself, and the price is the one derived in step 1.
-  const requirements = buildRequirements({
-    config: { payTo: config.payTo, feePayer: config.facilitator.feePayer },
-    price,
-    resource,
-  });
+  //
+  // With two assets on offer there is a question of which one the buyer paid in, and
+  // exactly one safe answer: the server tries its OWN offers in turn and the buyer's
+  // signature selects one by satisfying it. The unsafe answer — letting the envelope
+  // declare its asset — is the same trust bug as letting it declare its price, one field
+  // along: an attacker would name the asset whose terms suit them. So there is
+  // deliberately no code path here that reads an asset from the buyer, not even as a hint
+  // for ordering, because a hint that reorders a list of candidates is one refactor away
+  // from being the thing that chooses.
+  const candidates = candidateRequirements({ config, price, resource });
 
-  // 3. Verify.
+  // 3. Verify against each of our own offers until one is satisfied.
   let verdict;
-  try {
-    verdict = await verify({
-      baseUrl: config.facilitator.url,
-      requirements,
-      transaction: payment.transaction,
-      fetchImpl,
-      timeoutMs,
-    });
-  } catch (err) {
-    if (err instanceof FacilitatorError) {
-      // "We could not check" is not "your payment is bad". Reporting an outage as a
-      // rejection tells a buyer their good payment failed, and invites them to pay twice.
-      return json(502, {
-        error: 'payment verification unavailable',
-        detail: err.message,
-        reason: err.reason,
-        retryable: true,
+  let requirements;
+  for (const candidate of candidates) {
+    try {
+      // eslint-disable-next-line no-await-in-loop -- ordered by design; see above
+      verdict = await verify({
+        baseUrl: config.facilitator.url,
+        requirements: candidate,
+        transaction: payment.transaction,
+        fetchImpl,
+        timeoutMs,
       });
+    } catch (err) {
+      if (err instanceof FacilitatorError) {
+        // "We could not check" is not "your payment is bad". Reporting an outage as a
+        // rejection tells a buyer their good payment failed, and invites them to pay
+        // twice. Note this aborts rather than falling through to the next asset: an
+        // outage masked by "well, try the other one" would surface as a payment
+        // rejection, which is the exact confusion this branch exists to prevent.
+        return json(502, {
+          error: 'payment verification unavailable',
+          detail: err.message,
+          reason: err.reason,
+          retryable: true,
+        });
+      }
+      throw err;
     }
-    throw err;
+    requirements = candidate;
+    if (verdict.isValid) break;
   }
 
   if (!verdict.isValid) {
     return json(402, {
-      ...buildChallenge({ config, price, resource, schedule: publishedSchedule() }),
+      ...challengeFor({ config, price, resource }),
       error: 'payment rejected',
       reason: verdict.invalidReason,
     });
@@ -280,7 +325,7 @@ export async function handleRequest({
     // A definitive refusal, so the buyer may retry with a corrected payment.
     replayGuard.release(replayKey);
     return json(402, {
-      ...buildChallenge({ config, price, resource, schedule: publishedSchedule() }),
+      ...challengeFor({ config, price, resource }),
       error: 'settlement refused',
       reason: settlement.errorReason,
     });
@@ -297,7 +342,11 @@ export async function handleRequest({
         transactionId: settlement.transactionId,
         payer: verdict.payer ?? null,
         payee: config.payTo,
-        amount: price,
+        // What ACTUALLY moved, in the asset it moved in — taken from the requirements the
+        // buyer's signature satisfied, not from the tinybar price. A token payment logged
+        // as tinybar would put a false number in the one record meant to be trusted.
+        amount: BigInt(requirements.amount),
+        asset: requirements.asset === '0.0.0' ? 'HBAR' : requirements.asset,
         resource,
       }),
       config.receipts,
@@ -309,7 +358,16 @@ export async function handleRequest({
     200,
     {
       request,
-      charged: { amount: price.toString(), currency: 'tinybar', asset: 'HBAR' },
+      charged:
+        requirements.asset === '0.0.0'
+          ? { amount: requirements.amount, currency: 'tinybar', asset: 'HBAR' }
+          : {
+              amount: requirements.amount,
+              currency: 'token-unit',
+              asset: requirements.asset,
+              decimals: config.token?.decimals,
+              meteredPriceTinybar: price.toString(),
+            },
       settlement: { transactionId: settlement.transactionId, payer: verdict.payer },
       data,
     },

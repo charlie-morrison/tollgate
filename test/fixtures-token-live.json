@@ -1,0 +1,48 @@
+{
+    "admin_key": null,
+    "auto_renew_account": "0.0.10181137",
+    "auto_renew_period": 7776000,
+    "created_timestamp": "1789069344.464807104",
+    "custom_fees": {
+        "created_timestamp": "1789069344.464807104",
+        "fixed_fees": [],
+        "fractional_fees": [
+            {
+                "all_collectors_are_exempt": false,
+                "amount": {
+                    "numerator": 2,
+                    "denominator": 100
+                },
+                "collector_account_id": "0.0.10464960",
+                "denominating_token_id": "0.0.10464963",
+                "maximum": null,
+                "minimum": 0,
+                "net_of_transfers": true
+            }
+        ]
+    },
+    "decimals": "2",
+    "deleted": false,
+    "expiry_timestamp": 1796845343000000000,
+    "fee_schedule_key": null,
+    "freeze_default": false,
+    "freeze_key": null,
+    "initial_supply": "1000000",
+    "kyc_key": null,
+    "max_supply": "1000000",
+    "memo": "Pay-per-call credit for the Tollgate x402 gateway",
+    "metadata": "",
+    "metadata_key": null,
+    "modified_timestamp": "1789069344.464807104",
+    "name": "Tollgate x402 Credit",
+    "pause_key": null,
+    "pause_status": "NOT_APPLICABLE",
+    "supply_key": null,
+    "supply_type": "FINITE",
+    "symbol": "X402T",
+    "token_id": "0.0.10464963",
+    "total_supply": "1000000",
+    "treasury_account_id": "0.0.10181137",
+    "type": "FUNGIBLE_COMMON",
+    "wipe_key": null
+}

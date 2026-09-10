@@ -20,6 +20,7 @@
 import { createServer } from 'node:http';
 
 import { handleRequest, ReplayGuard } from './handler.mjs';
+import { tokenFromEnv } from './hts.mjs';
 
 /** A per-IP token bucket. Refills continuously rather than in steps, so a caller at the limit is not punished for arriving on a boundary. */
 export class RateLimiter {
@@ -204,10 +205,15 @@ export function configFromEnv(env = process.env) {
     throw new Error('receipt operator supplied without TOLLGATE_RECEIPT_TOPIC');
   }
 
+  // The HTS token rail is optional in the same way and for the same reason: absent means
+  // HBAR only, and half-configured is an error rather than a guess (tokenFromEnv throws).
+  const token = tokenFromEnv(env);
+
   return {
     payTo,
     facilitator: { url: facilitatorUrl, feePayer },
     receipts: topicId ? { topicId, operatorId, operatorKey } : null,
+    token,
   };
 }
 

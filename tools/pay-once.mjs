@@ -20,17 +20,28 @@ import {
   PrivateKey,
   Hbar,
   TransferTransaction,
+  TokenId,
   Transaction,
   TransactionId,
 } from '@hashgraph/sdk';
 
 const url = process.argv[2];
 if (!url) {
-  console.error('usage: pay-once.mjs <url> [--max-tinybar N]');
+  console.error('usage: pay-once.mjs <url> [--max-tinybar N] [--asset HBAR|0.0.x] [--max-units N]');
   process.exit(2);
 }
 const maxIdx = process.argv.indexOf('--max-tinybar');
 const MAX_TINYBAR = maxIdx > 0 ? BigInt(process.argv[maxIdx + 1]) : 5_000_000n;
+
+// Which advertised offer to take. The gateway may quote the same request in HBAR and in
+// an HTS token; the buyer chooses, and the choice is expressed by what it signs.
+const assetIdx = process.argv.indexOf('--asset');
+const WANT_ASSET = assetIdx > 0 ? process.argv[assetIdx + 1] : 'HBAR';
+
+// A token amount is NOT tinybar, so --max-tinybar cannot police it. A spend cap in the
+// wrong denomination is worse than none: it reads as a limit and permits anything.
+const unitsIdx = process.argv.indexOf('--max-units');
+const MAX_UNITS = unitsIdx > 0 ? BigInt(process.argv[unitsIdx + 1]) : null;
 
 const ACCOUNT = process.env.HEDERA_ACCOUNT_ID;
 const KEY = process.env.HEDERA_PRIVATE_KEY;
@@ -47,21 +58,45 @@ if (cold.status !== 402) {
   process.exit(1);
 }
 const challenge = await cold.json();
-const offer = (challenge.accepts || []).find(
+const hederaOffers = (challenge.accepts || []).filter(
   (a) => a.scheme === 'exact' && String(a.network).startsWith('hedera'),
 );
-if (!offer) {
+if (hederaOffers.length === 0) {
   console.error('no hedera offer in challenge');
   process.exit(1);
 }
+const offer = hederaOffers.find((a) => a.asset === WANT_ASSET);
+if (!offer) {
+  console.error(
+    `no offer for asset ${WANT_ASSET}; the gateway advertises ` +
+      hederaOffers.map((a) => a.asset).join(', '),
+  );
+  process.exit(1);
+}
 
-const price = BigInt(offer.maxAmountRequired);
-console.log(`[buyer] quoted ${price} tinybar for ${offer.resource}`);
+const isToken = offer.asset !== 'HBAR';
+const amount = BigInt(offer.maxAmountRequired);
+const unit = isToken ? `units of ${offer.asset}` : 'tinybar';
+console.log(`[buyer] quoted ${amount} ${unit} for ${offer.resource}`);
 console.log(`[buyer] payee ${offer.payTo}, fee payer ${offer.extra?.feePayer}`);
 
-// 2. Spend policy, before any signature exists.
-if (price > MAX_TINYBAR) {
-  console.error(`[buyer] REFUSING: ${price} exceeds policy ${MAX_TINYBAR}`);
+// 2. Spend policy, before any signature exists — and in the offer's OWN denomination.
+//    Comparing 350 token units against a 5,000,000-tinybar cap would "pass" a policy that
+//    never looked at the thing being spent.
+if (isToken) {
+  if (MAX_UNITS === null) {
+    console.error(
+      `[buyer] REFUSING: offer is denominated in ${offer.asset}; pass --max-units to set a ` +
+        'cap in that unit (a tinybar cap does not bound a token spend)',
+    );
+    process.exit(3);
+  }
+  if (amount > MAX_UNITS) {
+    console.error(`[buyer] REFUSING: ${amount} units exceeds policy ${MAX_UNITS}`);
+    process.exit(3);
+  }
+} else if (amount > MAX_TINYBAR) {
+  console.error(`[buyer] REFUSING: ${amount} exceeds policy ${MAX_TINYBAR}`);
   process.exit(3);
 }
 
@@ -78,9 +113,21 @@ const client = Client.forTestnet().setOperator(
   PrivateKey.fromStringECDSA(KEY),
 );
 
-const tx = await new TransferTransaction()
-  .addHbarTransfer(AccountId.fromString(ACCOUNT), Hbar.fromTinybars(-price))
-  .addHbarTransfer(AccountId.fromString(offer.payTo), Hbar.fromTinybars(price))
+const transfer = new TransferTransaction();
+if (isToken) {
+  // Signed as the DEBITED party only. The custom fee on this token is EXCLUSIVE, so the
+  // payee is credited exactly `amount` and the fee is charged to us on top — which is
+  // what lets an `exact`-scheme check pass at all.
+  transfer
+    .addTokenTransfer(TokenId.fromString(offer.asset), AccountId.fromString(ACCOUNT), -amount)
+    .addTokenTransfer(TokenId.fromString(offer.asset), AccountId.fromString(offer.payTo), amount);
+} else {
+  transfer
+    .addHbarTransfer(AccountId.fromString(ACCOUNT), Hbar.fromTinybars(-amount))
+    .addHbarTransfer(AccountId.fromString(offer.payTo), Hbar.fromTinybars(amount));
+}
+
+const tx = await transfer
   .setTransactionMemo('x402 tollgate')
   .setTransactionId(TransactionId.generate(AccountId.fromString(feePayer)))
   .setNodeAccountIds([new AccountId(3)])

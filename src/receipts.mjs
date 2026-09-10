@@ -64,6 +64,11 @@ export function buildReceipt({
   payee,
   amount,
   resource,
+  // Defaults to native HBAR, but must NOT stay a constant. The gateway can settle in an
+  // HTS token, and a receipt that hardcodes HBAR would record a 300-unit token payment as
+  // 300 tinybar — a false entry in the one record that exists to be trusted. Same failure
+  // shape as a /health endpoint that hardcodes a property instead of reporting it.
+  asset = 'HBAR',
   at = new Date(),
 }) {
   if (typeof transactionId !== 'string' || transactionId.length === 0) {
@@ -82,8 +87,16 @@ export function buildReceipt({
   const normalisedAmount =
     typeof amount === 'bigint' || typeof amount === 'number' ? String(amount) : amount;
   if (typeof normalisedAmount !== 'string' || !/^\d+$/.test(normalisedAmount)) {
-    throw new TypeError(`amount must be a whole number of tinybar, got ${String(amount)}`);
+    throw new TypeError(`amount must be a whole number of the asset's unit, got ${String(amount)}`);
   }
+
+  // HBAR is counted in tinybar; an HTS token is counted in its own smallest unit, and the
+  // decimals live on the token rather than in the receipt. Anything that is neither is
+  // refused rather than recorded under a guessed denomination.
+  if (asset !== 'HBAR' && !/^\d+\.\d+\.\d+$/.test(asset)) {
+    throw new TypeError(`asset must be 'HBAR' or a Hedera token id, got ${String(asset)}`);
+  }
+  const currency = asset === 'HBAR' ? 'tinybar' : 'token-unit';
 
   return {
     schema: RECEIPT_SCHEMA,
@@ -91,8 +104,8 @@ export function buildReceipt({
     payer,
     payee,
     amount: normalisedAmount,
-    currency: 'tinybar',
-    asset: 'HBAR',
+    currency,
+    asset,
     resource,
     at: at.toISOString(),
   };
