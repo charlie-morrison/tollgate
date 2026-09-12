@@ -49,6 +49,26 @@ The same hole has a second door: pay honestly for a cheap request, then present 
 receipt against an expensive one. Closed the same way — the price is re-derived from the
 request in hand, never from anything the buyer said about it.
 
+### 2b. Two assets, and still only one thing the buyer supplies
+
+Tollgate quotes the same request in HBAR and in an HTS token, and the buyer picks. The
+obvious implementation — read the asset out of the payment envelope and check against
+that offer — reopens rule 2 through a side door, because "which offer am I being held
+to?" is a *term*, and terms do not come from the buyer.
+
+So there is deliberately no code path that reads an asset from the envelope. The server
+enumerates **its own** offers and tries each in turn; the buyer's signature selects one by
+satisfying it. Not even as an ordering hint — a hint that reorders candidates is one
+refactor away from being the thing that chooses.
+
+A facilitator outage during that loop **aborts** rather than falling through to the next
+asset. "Try the other one" would quietly convert an outage into a payment rejection, and
+tell an honest buyer their good payment was bad.
+
+The token amount is a pure function of the tinybar price, so a second asset does not
+create a second pricing authority — rule 1 still holds with two rails. Rounding is *up*:
+a floor would make the token a silent discount for choosing a payment method.
+
 ### 3. Settlement is confirmed against the ledger, not against a reply
 
 A facilitator's `{"success": true}` is a claim. The mirror node is the record. Tollgate
@@ -62,9 +82,25 @@ the ledger; it cannot move money. That property is load-bearing for the whole pi
 unattended agent-facing endpoint that *can* spend is a liability, and one that cannot is
 just a meter.
 
-## Open questions being worked
+## Two questions that turned out to be about ordering
 
-- Replay: a signed transaction is bearer-ish until it is consumed. Tracking consumed
-  transaction ids, and where in the verify/settle order the claim is made.
-- Rate limiting the verification path without ever throttling the unpaid quote — an honest
-  buyer must always be able to read the price before paying.
+Both of these were listed here as open while the service was still local. Neither was hard
+arithmetic; both were decided by *where* in the sequence the step goes.
+
+**Replay.** A signed transaction is bearer-ish until it is consumed, so consumed ids are
+tracked. The claim is made **after verify passes and before settle**. Claim it later and a
+settle that times out leaves the same signed bytes replayable; claim it earlier and a
+stranger burns a real buyer's transaction with junk that was never going to verify.
+
+The awkward case is a settle whose outcome is unknown — a timeout may still have landed.
+An indeterminate settlement does **not** release the key, because releasing it invites an
+honest buyer to pay a second time for the same work. They are told the outcome is
+indeterminate and given the transaction id to check themselves, which is worse UX and
+better behaviour.
+
+**Rate limiting.** A per-IP token bucket guards the **verification** path only. `/health`
+and the unpaid 402 are exempt by design: an honest buyer must always be able to read the
+price before paying, and a paywall in front of the price tag breaks the protocol's own
+first step. The limit exists because verification costs *us* a facilitator call, and that
+quota is keyed to the deployment's IP — so an unauthenticated stranger posting junk
+headers could otherwise take the service offline for everyone.

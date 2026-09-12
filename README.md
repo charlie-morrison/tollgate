@@ -86,24 +86,77 @@ curl "https://testnet.mirrornode.hedera.com/api/v1/transactions/0.0.x-secs-nanos
 ### What that proves, measured
 
 A real request served through this deployment, verified on the mirror node rather than
-from the facilitator's own reply:
+from the facilitator's own reply — transaction
+[`0.0.7162784@1789218208.606692536`](https://testnet.mirrornode.hedera.com/api/v1/transactions/0.0.7162784-1789218208-606692536):
 
 | | |
 |---|---|
 | quoted and charged | **240,000 tinybar** for `records=2&detail=summary` — the metered price, not a flat rate |
 | buyer debited | exactly 240,000 |
 | payee credited | exactly 240,000 |
-| network fee | **242,014 tinybar, charged to the facilitator** — 0% buyer overhead |
+| network fee | **267,561 tinybar, charged to the facilitator** — 0% buyer overhead |
+
+The fee sits on the facilitator in every settlement we have measured, which is what makes
+the buyer's overhead zero rather than merely small. Across **16** facilitator-submitted
+settlements to this payee the fee ranges **242,014 – 267,848 tinybar** while the buyer is
+debited the quote and nothing else. Count that yourself:
+
+```bash
+curl 'https://testnet.mirrornode.hedera.com/api/v1/transactions?account.id=0.0.10181166&transactiontype=cryptotransfer&result=success&limit=100'
+```
+
+### Paying in a token instead
+
+The same request is quoted twice — in HBAR and in an HTS token — and the buyer chooses by
+signing one of them. Both quotes come from the same meter: the token amount is derived
+from the tinybar price, so picking a payment method never changes what the request costs.
+The `402` publishes the conversion as `tokenSchedule`, so an agent can budget in either
+asset without paying to discover the rate.
+
+```bash
+HEDERA_ACCOUNT_ID=0.0.x HEDERA_PRIVATE_KEY=… \
+  node tools/pay-once.mjs 'http://144.172.101.164:8404/query?records=2&detail=summary' \
+    --asset 0.0.10464963 --max-units 1000
+```
+
+Token **`0.0.10464963`** (X402T) carries a **2% fractional fee** to collector
+`0.0.10464960`, created during the event by [`tools/create-fee-token.mjs`](tools/create-fee-token.mjs).
+Every key on it is empty — admin, supply, fee schedule, freeze, wipe, pause, KYC — so the
+fee and the supply are immutable, including to us.
+
+Two things about custom-fee tokens are easy to get wrong, and both are enforced in code
+rather than documented and hoped for:
+
+- The fee must be **EXCLUSIVE**. An `INCLUSIVE` fee comes *out of* the transfer, so under
+  the `exact` scheme the payee lands short and **every** settlement is rejected as
+  underpaid — permanently, for every buyer, with an error blaming the payer.
+  `assertTokenUsable` reads `net_of_transfers` off the mirror node and refuses such a token
+  by name, rather than trusting the script that minted it.
+- The **treasury and any fee collector are exempt from the token's own fees**. A demo
+  funded by the treasury shows the fee never firing and proves the opposite of the claim,
+  so both are refused as buyers — in the module *and* in the funding tool.
+
+A real token settlement, again read off the mirror rather than from the facilitator —
+[`0.0.7162784@1789218229.988614769`](https://testnet.mirrornode.hedera.com/api/v1/transactions/0.0.7162784-1789218229-988614769):
+payee credited **240** units (the metered price), collector **+4** (the 2% firing, truncated),
+buyer debited **244**. The fee sits *on top of* the transfer rather than inside it, which is
+exactly what lets an `exact` check pass.
+
+Settling in a token costs more on the network — about **2.8M tinybar, ~10× the HBAR
+rail** — and the facilitator still pays it. Worth one caveat we measured the hard way: the
+*first* token payment to a fresh payee cost 69,197,868 because the payee auto-associates
+the token on first receipt. That is one-time account setup, not the per-request cost, and
+reading it as the latter would overstate the token rail by 25×.
 
 ## Status
 
 Requirements 1–3 of the Hedera **AI & Agentic Payments** track are met: hosted, settling
 over the sponsor's facilitator, metered per unit of work — plus verifiable payment audit
-trails on HCS. The commit history is the honest record of how much exists at any moment.
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the protocol shape and
-[`docs/PRICING.md`](docs/PRICING.md) for the fee schedule.
+trails on HCS and multi-asset settlement in HBAR or an HTS token. The commit history is
+the honest record of how much exists at any moment. See [`docs/DESIGN.md`](docs/DESIGN.md)
+for the protocol shape and [`docs/PRICING.md`](docs/PRICING.md) for the fee schedule.
 
-Running the tests requires no network and no account: `npm test` (136 assertions).
+Running the tests requires no network and no account: `npm test` (189 assertions).
 
 ## Licence
 
