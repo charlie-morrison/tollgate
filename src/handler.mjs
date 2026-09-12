@@ -39,6 +39,11 @@ import {
 } from './facilitator.mjs';
 import { buildReceipt, readReceipts, emitReceipt } from './receipts.mjs';
 import { tokenAmountFor, buildTokenOffer, tokenSchedule } from './hts.mjs';
+import {
+  buildDiscoveryDocument,
+  DISCOVERY_PATH,
+  REFERENCE_RESOURCE_PATH,
+} from './discovery.mjs';
 
 /**
  * Every offer this server is willing to be paid under, as server-authored requirements.
@@ -197,10 +202,40 @@ export async function handleRequest({
     }
   }
 
+  // Discovery. Free and unthrottled for the same reason the quote is: a service nobody
+  // can find without being told about it is not discoverable, and a directory crawler
+  // that gets a 429 concludes we are down.
+  if (parsed.pathname === DISCOVERY_PATH) {
+    // The reference price comes from the meter with NO parameters, which is exactly what
+    // a bare `/query` is priced at. Not a constant repeated here — a constant would be
+    // free to drift away from the meter, and a discovery document that misquotes is
+    // worse than one that does not exist.
+    const { price: referencePrice } = meter(new URLSearchParams());
+    const resource = `${parsed.origin}${REFERENCE_RESOURCE_PATH}`;
+    // Built from the CHALLENGE, not from the verification requirements. The two disagree
+    // about one field on purpose: the 402 advertises `asset: "HBAR"` while the facilitator
+    // envelope names the same asset `0.0.0`, Hedera's id for it. A directory consumer
+    // compares a listing against the 402 it gets back, so the listing has to be the 402's
+    // view. Publishing the internal form would have listed an asset no buyer ever sees.
+    const reference = challengeFor({ config, price: referencePrice, resource });
+    return json(
+      200,
+      buildDiscoveryDocument({
+        config: {
+          ...config,
+          schedule: reference.schedule,
+          tokenSchedule: reference.tokenSchedule ?? null,
+        },
+        origin: parsed.origin,
+        offers: reference.accepts,
+      }),
+    );
+  }
+
   if (parsed.pathname !== '/query') {
     return json(404, {
       error: 'not found',
-      endpoints: ['/query', '/schedule', '/receipts', '/health'],
+      endpoints: ['/query', '/schedule', '/receipts', '/health', DISCOVERY_PATH],
     });
   }
 

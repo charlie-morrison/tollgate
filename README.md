@@ -45,6 +45,34 @@ curl  http://144.172.101.164:8404/receipts                       # the public se
 curl  http://144.172.101.164:8404/health
 ```
 
+### Being found without being told about it
+
+An agent that already knows the URL can read the price. One that doesn't needs to find the
+service at all, so Tollgate serves the x402 discovery document at the conventional path:
+
+```bash
+curl http://144.172.101.164:8404/.well-known/x402
+```
+
+Two decisions in there are worth stating, because both are about not lying to a reader who
+cannot check:
+
+**The listing carries no `quality` block.** The published schema has a place for 30-day
+call counts and unique payer counts. Those are *facilitator-observed* figures, and a
+service that fills them in is publishing its own reputation. We emit no such key at all,
+and a test asserts it cannot appear even if the data is handed to the builder.
+
+**A metered service has no flat price**, and the schema's `amount` is a single number. So
+the amount published is the true price of the exact `resource` URL published next to it —
+the bare `/query`, whose defaults make it the cheapest real request — and the schedule that
+produces every other price travels with it under `extensions.metered`. An agent can budget
+any request from the document, and the one number it sees is a fact rather than a
+representative sample. The authoritative quote is still the `402` for the request in hand.
+
+The document is built from the same challenge a buyer pays against, not from a separate
+description of it, so the two cannot drift; a crossing test asserts the advertised amounts
+equal the live `402`'s, asset for asset.
+
 ### The receipt trail
 
 Every settled payment is published to a Hedera Consensus Service topic as an
@@ -152,11 +180,12 @@ reading it as the latter would overstate the token rail by 25×.
 
 Requirements 1–3 of the Hedera **AI & Agentic Payments** track are met: hosted, settling
 over the sponsor's facilitator, metered per unit of work — plus verifiable payment audit
-trails on HCS and multi-asset settlement in HBAR or an HTS token. The commit history is
+trails on HCS, multi-asset settlement in HBAR or an HTS token, and an x402
+discovery document so other agents can find the service. The commit history is
 the honest record of how much exists at any moment. See [`docs/DESIGN.md`](docs/DESIGN.md)
 for the protocol shape and [`docs/PRICING.md`](docs/PRICING.md) for the fee schedule.
 
-Running the tests requires no network and no account: `npm test` (189 assertions).
+Running the tests requires no network and no account: `npm test` (204 assertions).
 
 ## Licence
 
